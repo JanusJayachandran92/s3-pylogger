@@ -1,0 +1,41 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "s3-pylogger"
+version = "0.1.0"
+description = "A writable stream / logging.Handler that uploads log data to S3 with rotating object names, Hive-style date partitioning, and JSON formatting for AWS Athena."
+readme = "README.md"
+requires-python = ">=3.8"
+license = { text = "ISC" }
+authors = [
+    { name = "Your Name", email = "you@example.com" }
+]
+keywords = ["s3", "logging", "aws", "streaming", "log-rotation", "athena", "json"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: ISC License (ISCL)",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.8",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: System :: Logging",
+]
+dependencies = [
+    "boto3>=1.26"
+]
+
+[project.urls]
+Homepage   = "https://github.com/yourname/s3-pylogger"
+Repository = "https://github.com/yourname/s3-pylogger"
+Issues     = "https://github.com/yourname/s3-pylogger/issues"
+
+[project.optional-dependencies]
+dev = ["pytest", "moto[s3]", "build", "twine"]
+
+[tool.setuptools.packages.find]
+where = ["src"]
