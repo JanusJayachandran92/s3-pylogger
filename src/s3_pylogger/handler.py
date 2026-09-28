@@ -93,6 +93,13 @@ class S3StreamLogger(io.RawIOBase):
         Default 10,000.
     compress:
         If true, gzip the data before uploading. Default False.
+    content_type:
+        HTTP ``Content-Type`` header set on every uploaded S3 object.
+        When ``None`` (default), the type is inferred automatically:
+        ``"application/json"`` if the key ends with ``.json``, otherwise
+        ``"text/plain; charset=utf-8"``.
+        When ``compress=True``, ``ContentEncoding: gzip`` is also set so
+        browsers and S3 clients decompress the file transparently.
     server_side_encryption:
         If true, use S3 ``ServerSideEncryption="AES256"``. Default False.
     storage_class:
@@ -126,6 +133,7 @@ class S3StreamLogger(io.RawIOBase):
         buffer_size: int = DEFAULT_BUFFER_SIZE,
         partition_by_date: bool = DEFAULT_PARTITION_BY_DATE,
         compress: bool = False,
+        content_type: Optional[str] = None,
         server_side_encryption: bool = False,
         storage_class: Optional[str] = None,
         acl: Optional[str] = None,
@@ -151,6 +159,7 @@ class S3StreamLogger(io.RawIOBase):
         self.buffer_size = int(buffer_size)
         self.partition_by_date = bool(partition_by_date)
         self.compress = bool(compress)
+        self.content_type = content_type
         self.server_side_encryption = server_side_encryption
         self.storage_class = storage_class
         self.acl = acl
@@ -262,7 +271,17 @@ class S3StreamLogger(io.RawIOBase):
         if self.compress:
             payload = gzip.compress(payload)
 
-        extra = {}
+        # Determine Content-Type: explicit override > auto-detect from key
+        if self.content_type is not None:
+            ct = self.content_type
+        elif key.endswith(('.json', '.json.gz')):
+            ct = 'application/json'
+        else:
+            ct = 'text/plain; charset=utf-8'
+
+        extra = {'ContentType': ct}
+        if self.compress:
+            extra['ContentEncoding'] = 'gzip'
         if self.server_side_encryption:
             extra["ServerSideEncryption"] = "AES256"
         if self.storage_class:

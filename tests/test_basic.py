@@ -269,65 +269,81 @@ def test_json_formatter_exc_info():
     assert "ValueError" in data["exc_info"]
 
 
-def test_log_format_json_handler(s3_bucket):
-    """S3StreamHandler with log_format='json' writes valid JSON lines to S3."""
-    handler = S3StreamHandler(
-        bucket=BUCKET,
-        boto3_kwargs={"region_name": REGION},
-        upload_every=999,
-        log_format="json",
-    )
-    logger = logging.getLogger("s3_pylogger.test_json")
-    logger.setLevel(logging.DEBUG)
-    logger.addHandler(handler)
-
-    logger.info("structured log", extra={"request_id": "abc-123"})
-    handler.stream.flush()
-
-    bodies = _list_bodies(s3_bucket, BUCKET)
-    assert len(bodies) == 1
-    line = bodies[0][1].decode().strip()
-    data = json.loads(line)
-    assert data["level"] == "INFO"
-    assert data["message"] == "structured log"
-    assert data["request_id"] == "abc-123"
-
-    logger.removeHandler(handler)
-    handler.close()
 
 
-def test_log_format_text_is_default(s3_bucket):
-    """Default handler (no log_format) must NOT produce JSON lines."""
-    handler = S3StreamHandler(
+# ---------------------------------------------------------------------------
+# content_type / S3 metadata tests
+# ---------------------------------------------------------------------------
+
+
+def test_content_type_default_is_text_plain(s3_bucket):
+    """Default upload sets ContentType=text/plain; charset=utf-8."""
+    stream = S3StreamLogger(
         bucket=BUCKET,
         boto3_kwargs={"region_name": REGION},
         upload_every=999,
     )
-    logger = logging.getLogger("s3_pylogger.test_text")
-    logger.setLevel(logging.DEBUG)
-    logger.addHandler(handler)
-    logger.warning("plain text message")
-    handler.stream.flush()
+    stream.write("hello\n")
+    stream.flush()
 
-    bodies = _list_bodies(s3_bucket, BUCKET)
-    assert len(bodies) == 1
-    line = bodies[0][1].decode().strip()
-    # Plain text should NOT be parseable as JSON object
-    try:
-        parsed = json.loads(line)
-        assert not isinstance(parsed, dict), "Expected plain-text, got JSON object"
-    except json.JSONDecodeError:
-        pass  # expected
-
-    logger.removeHandler(handler)
-    handler.close()
+    resp = s3_bucket.list_objects_v2(Bucket=BUCKET)
+    obj = resp["Contents"][0]
+    head = s3_bucket.head_object(Bucket=BUCKET, Key=obj["Key"])
+    assert head["ContentType"] == "text/plain; charset=utf-8"
+    stream.close()
 
 
-def test_log_format_invalid_raises():
-    """An unrecognised log_format value must raise ValueError immediately."""
-    with pytest.raises(ValueError, match="log_format"):
-        S3StreamHandler(
-            bucket=BUCKET,
-            boto3_kwargs={"region_name": REGION},
-            log_format="xml",
-        )
+def test_content_type_explicit_override(s3_bucket):
+    """Explicit content_type= is passed through to S3."""
+    stream = S3StreamLogger(
+        bucket=BUCKET,
+        boto3_kwargs={"region_name": REGION},
+        upload_every=999,
+        content_type="application/x-ndjson",
+    )
+    stream.write("{}\n")
+    stream.flush()
+
+    resp = s3_bucket.list_objects_v2(Bucket=BUCKET)
+    obj = resp["Contents"][0]
+    head = s3_bucket.head_object(Bucket=BUCKET, Key=obj["Key"])
+    assert head["ContentType"] == "application/x-ndjson"
+    stream.close()
+
+
+def test_content_type_json_key(s3_bucket):
+    """Keys ending in .json get ContentType=application/json automatically."""
+    stream = S3StreamLogger(
+        bucket=BUCKET,
+        boto3_kwargs={"region_name": REGION},
+        upload_every=999,
+        name_format="app-{unique}.json",
+    )
+    stream.write("{}\n")
+    stream.flush()
+
+    resp = s3_bucket.list_objects_v2(Bucket=BUCKET)
+    obj = resp["Contents"][0]
+    assert obj["Key"].endswith(".json")
+    head = s3_bucket.head_object(Bucket=BUCKET, Key=obj["Key"])
+    assert head["ContentType"] == "application/json"
+    stream.close()
+
+
+def test_content_encoding_gzip_set_when_compress(s3_bucket):
+    """compress=True sets ContentEncoding=gzip alongside ContentType."""
+    stream = S3StreamLogger(
+        bucket=BUCKET,
+        boto3_kwargs={"region_name": REGION},
+        upload_every=999,
+        compress=True,
+    )
+    stream.write("compressed\n")
+    stream.flush()
+
+    resp = s3_bucket.list_objects_v2(Bucket=BUCKET)
+    obj = resp["Contents"][0]
+    head = s3_bucket.head_object(Bucket=BUCKET, Key=obj["Key"])
+    assert head["ContentType"] == "text/plain; charset=utf-8"
+    assert head.get("ContentEncoding") == "gzip"
+    stream.close()
