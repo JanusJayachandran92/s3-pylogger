@@ -10,7 +10,7 @@ readme = "README.md"
 requires-python = ">=3.8"
 license = { text = "ISC" }
 authors = [
-    { name = "Your Name", email = "you@example.com" }
+    { name = "Janus J" }
 ]
 keywords = ["s3", "logging", "aws", "streaming", "log-rotation", "athena", "json"]
 classifiers = [
