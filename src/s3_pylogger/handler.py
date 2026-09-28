@@ -106,13 +106,21 @@ class S3StreamLogger(io.RawIOBase):
         S3 storage class (e.g. ``"STANDARD_IA"``). Default: S3's default.
     acl:
         Canned ACL to apply to uploaded objects. Default: none.
+    aws_access_key_id:
+        AWS access key ID. If omitted, boto3's credential chain is used
+        (env vars, ``~/.aws/credentials``, IAM role, etc.).
+    aws_secret_access_key:
+        AWS secret access key paired with ``aws_access_key_id``.
+    region_name:
+        AWS region, e.g. ``"us-east-1"``. If omitted, boto3 resolves it
+        from the environment or config file.
     s3_client:
-        Optional pre-configured ``boto3`` S3 client. If omitted, one is
-        created with ``boto3.client("s3", **boto3_kwargs)``.
+        Optional pre-configured ``boto3`` S3 client. When supplied, all
+        credential / region arguments above are ignored.
     boto3_kwargs:
-        Extra keyword arguments passed to ``boto3.client("s3", ...)`` when
-        ``s3_client`` is not supplied (e.g. ``region_name``,
-        ``aws_access_key_id``).
+        Extra keyword arguments forwarded to ``boto3.client("s3", ...)``.
+        Anything set here is overridden by the explicit credential params
+        above when both are provided.
     on_error:
         Optional callback ``fn(exception)`` invoked when an upload fails.
         If not given, errors are printed to stderr. As with the Node
@@ -137,6 +145,9 @@ class S3StreamLogger(io.RawIOBase):
         server_side_encryption: bool = False,
         storage_class: Optional[str] = None,
         acl: Optional[str] = None,
+        aws_access_key_id: Optional[str] = None,
+        aws_secret_access_key: Optional[str] = None,
+        region_name: Optional[str] = None,
         s3_client=None,
         boto3_kwargs: Optional[dict] = None,
         on_error: Optional[Callable[[Exception], None]] = None,
@@ -165,7 +176,17 @@ class S3StreamLogger(io.RawIOBase):
         self.acl = acl
         self.on_error = on_error
 
-        self._s3 = s3_client or boto3.client("s3", **(boto3_kwargs or {}))
+        # Build boto3 client kwargs: start from boto3_kwargs then overlay
+        # any explicitly provided credential / region arguments so that
+        # direct params always take precedence over the dict.
+        _client_kwargs: dict = dict(boto3_kwargs or {})
+        if aws_access_key_id is not None:
+            _client_kwargs["aws_access_key_id"] = aws_access_key_id
+        if aws_secret_access_key is not None:
+            _client_kwargs["aws_secret_access_key"] = aws_secret_access_key
+        if region_name is not None:
+            _client_kwargs["region_name"] = region_name
+        self._s3 = s3_client or boto3.client("s3", **_client_kwargs)
         self._hostname = socket.gethostname()
 
         self._lock = threading.RLock()
