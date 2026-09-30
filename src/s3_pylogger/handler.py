@@ -218,7 +218,11 @@ class S3StreamLogger(io.RawIOBase):
             self._buffer.extend(data)
             should_flush = len(self._buffer) >= self.buffer_size
         if should_flush:
-            self._flush(rotate_if_needed=True)
+            # Force a rotation so the next batch goes to a fresh S3 key.
+            # Without this, successive buffer-size flushes all call put_object
+            # on the *same* key, with each upload overwriting the previous one
+            # (S3 has no append semantics), causing data loss.
+            self._flush(rotate_if_needed=True, force_rotate=True)
         return len(data)
 
     def flush(self) -> None:
@@ -270,20 +274,25 @@ class S3StreamLogger(io.RawIOBase):
         self._current_key = key
         self._object_started_at = time.monotonic()
 
-    def _should_rotate(self) -> bool:
+    def _should_rotate(self, pre_flush_size: int = 0) -> bool:
         if self._current_key is None:
             return False
         age = time.monotonic() - self._object_started_at
-        return age >= self.rotate_every or len(self._buffer) >= self.max_file_size
+        # Use pre_flush_size (captured before buffer.clear()) so the
+        # max_file_size check is not always False after clearing.
+        return age >= self.rotate_every or pre_flush_size >= self.max_file_size
 
-    def _flush(self, rotate_if_needed: bool):
+    def _flush(self, rotate_if_needed: bool, force_rotate: bool = False):
         with self._lock:
             if not self._buffer or self._current_key is None:
                 return
             payload = bytes(self._buffer)
             key = self._current_key
+            # Capture size *before* clearing so _should_rotate can compare
+            # against max_file_size accurately.
+            pre_flush_size = len(self._buffer)
             self._buffer.clear()
-            if rotate_if_needed and self._should_rotate():
+            if rotate_if_needed and (force_rotate or self._should_rotate(pre_flush_size)):
                 self._current_key = None  # next write() starts a fresh object
 
         self._upload(key, payload)
