@@ -226,8 +226,14 @@ class S3StreamLogger(io.RawIOBase):
         return len(data)
 
     def flush(self) -> None:
-        """Force an upload of any buffered data right now."""
-        self._flush(rotate_if_needed=True)
+        """Force an upload of any buffered data right now.
+
+        Uploads the full accumulated buffer to S3 without clearing it, so
+        subsequent writes continue appending to the same in-memory log.
+        The buffer is only cleared when a rotation occurs or the handler
+        is closed.
+        """
+        self._flush(rotate_if_needed=True, clear_buffer=False)
 
     def close(self) -> None:
         if self._closed:
@@ -236,7 +242,7 @@ class S3StreamLogger(io.RawIOBase):
         self._stop_event.set()
         self._worker.join(timeout=self.upload_every + 5)
         # final flush, synchronously, whatever is left
-        self._flush(rotate_if_needed=False)
+        self._flush(rotate_if_needed=False, clear_buffer=True)
         super().close()
 
     def __enter__(self):
@@ -249,7 +255,10 @@ class S3StreamLogger(io.RawIOBase):
 
     def _run(self):
         while not self._stop_event.wait(self.upload_every):
-            self._flush(rotate_if_needed=True)
+            # Periodic sync: re-upload the full accumulated buffer so S3 has
+            # the latest content without clearing it.  Buffer is only cleared
+            # when a rotation happens (age/size threshold) or on close().
+            self._flush(rotate_if_needed=True, clear_buffer=False)
 
     def _start_new_object(self):
         unique = uuid.uuid4().hex[:8]
@@ -282,18 +291,51 @@ class S3StreamLogger(io.RawIOBase):
         # max_file_size check is not always False after clearing.
         return age >= self.rotate_every or pre_flush_size >= self.max_file_size
 
-    def _flush(self, rotate_if_needed: bool, force_rotate: bool = False):
+    def _flush(
+        self,
+        rotate_if_needed: bool,
+        force_rotate: bool = False,
+        clear_buffer: bool = True,
+    ):
+        """Upload buffered data to S3.
+
+        Parameters
+        ----------
+        rotate_if_needed:
+            When True, checks whether a rotation (new S3 key) is due after
+            the upload.
+        force_rotate:
+            When True, always rotate after uploading regardless of age/size.
+            Used by buffer-size triggered flushes.
+        clear_buffer:
+            When True (default for close() and buffer-size flushes), the
+            in-memory buffer is cleared after uploading.  When False (used by
+            the periodic timer and public flush()), the buffer is kept intact
+            so the next timer tick can re-upload the *full* accumulated
+            content — this is required because S3 put_object overwrites the
+            object rather than appending to it.
+        """
         with self._lock:
             if not self._buffer or self._current_key is None:
                 return
             payload = bytes(self._buffer)
             key = self._current_key
-            # Capture size *before* clearing so _should_rotate can compare
-            # against max_file_size accurately.
             pre_flush_size = len(self._buffer)
-            self._buffer.clear()
-            if rotate_if_needed and (force_rotate or self._should_rotate(pre_flush_size)):
-                self._current_key = None  # next write() starts a fresh object
+
+            should_rotate = rotate_if_needed and (
+                force_rotate or self._should_rotate(pre_flush_size)
+            )
+
+            if should_rotate:
+                # Rotation: clear buffer so the next rotation window starts
+                # fresh, and signal write() to open a new S3 object.
+                self._buffer.clear()
+                self._current_key = None
+            elif clear_buffer:
+                # close() path: final upload, clear buffer, keep current key.
+                self._buffer.clear()
+            # else (periodic timer / public flush): keep buffer intact so the
+            # next flush re-uploads the full accumulated content.
 
         self._upload(key, payload)
 
